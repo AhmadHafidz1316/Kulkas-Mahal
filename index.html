@@ -12,7 +12,483 @@
 </head>
 <body>
     <div class="display-none">
-        tolol lu
+        // Migrasi 
+
+        Schema::create('products', function (Blueprint $table) {
+            $table->id();
+            $table->string('gambar');
+            $table->string('nama_produk');
+            $table->integer('harga');
+            $table->integer('stok');
+            $table->timestamps();
+        });
+
+
+        Schema::create('customers', function (Blueprint $table) {
+            $table->id();
+            $table->string('nama');
+            $table->string('no_hp')->nullable();
+            $table->integer('total_point')->nullable();
+            $table->date('member_join')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('transactions', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('user_id');
+            $table->unsignedBigInteger('customer_id')->nullable();
+            $table->foreign('user_id')->references('id')->on('users');
+            $table->foreign('customer_id')->references('id')->on('customers');
+            $table->integer('total_price');
+            $table->integer('total_payment');
+            $table->integer('total_return');
+            $table->integer('point');
+            $table->integer('used_point')->nullable()->defaultValue(0);
+            $table->timestamps();
+        });
+
+        Schema::create('transactions_details', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('transaction_id');
+            $table->unsignedBigInteger('product_id');
+            $table->foreign('transaction_id')->references('id')->on('transactions');
+            $table->foreign('product_id')->references('id')->on('products');
+            $table->integer('quantity');
+            $table->integer('sub_total');
+            $table->timestamps();
+        });
+
+        // Model 
+
+        class Transactions extends Model
+{
+    protected $guarded = ['id'];
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    // Relasi ke Customer (Transaksi bisa memiliki customer, tapi bisa juga null)
+    public function customer()
+    {
+        return $this->belongsTo(Customers::class);
+    }
+
+    public function details()
+    {
+        return $this->hasMany(TransactionDetail::class, 'transaction_id');
+    }
+}
+
+
+class TransactionDetail extends Model
+{
+
+    protected $guarded = ['id'];
+    protected $table = 'transactions_details';
+
+
+    public function transaction()
+    {
+        return $this->belongsTo(Transactions::class);
+    }
+
+    public function product()
+    {
+        return $this->belongsTo(Products::class, 'products_id');
+    }
+}
+
+class Products extends Model
+{
+    protected $guarded = [ 'id' ] ;
+
+    public function transactionDetails()
+    {
+        return $this->hasMany(TransactionDetail::class);
+    }
+}
+
+    // Controller 
+
+    public function login(Request $request)
+    {
+        try {
+            $credentials = $request->validate([
+                'email' => 'required|email',
+                'password' => 'required'
+            ]);
+
+            if (Auth::attempt($credentials)) {
+                $user = Auth::user();
+
+                // Cek role
+                if ($user->role === 'admin' || $user->role === 'petugas') {
+                    return redirect()->route('dashboard');
+                }
+
+                // Logout jika role tidak dikenali
+                Auth::logout();
+                return redirect()->route('login')->with('error', 'Role tidak dikenali');
+            } else {
+                // Jika email atau password salah
+                return back()->with('error', 'Email atau password salah');
+            }
+        } catch (\Throwable $th) {
+            return back()->with('error', 'Terjadi kesalahan pada sistem');
+        }
+    }
+
+    public function store(Request $request) 
+    {
+        if (!$request) {
+            return redirect()->back()->with('error', 'field ini kosong');
+        }
+        try {
+            $storeProduct = $request->validate([
+                'nama_produk' => 'required|string',
+                'harga' => 'required|string',
+                'stok' => 'required|integer',
+                'gambar' => 'required|image|mimes:png,jpg,jpeg|max:2048'
+            ]);
+
+            $harga = (int) str_replace(['Rp', '.', ','], '', $request->harga);
+            $path = $request->file('gambar')->store('images', 'public');
+
+            Products::create([
+                'nama_produk' => $request->nama_produk,
+                'harga' => $harga,
+                'stok' => $request->stok,
+                'gambar' => $path
+            ]);
+
+            return redirect()->route('product')->with('success', 'Berhasil Menambah Barang');
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return redirect()->back()->with('error', 'Format gambar tidak valid');
+        } catch (\Throwable $th) {
+            return redirect()->back()->with('error', 'Gagal Menambah Barang');
+        }
+
+    }
+
+    public function update(Request $request, $id)
+    {
+        try {
+            $product = Products::findOrFail($id);
+
+            $request->validate(
+                [
+                    'nama_produk' => 'required|string|max:255',
+                    'harga' => 'required|integer',
+                    'gambar' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg|max:2048',
+                ]
+            );
+
+            $product->nama_produk = $request->nama_produk;
+            $product->harga = $request->harga;
+
+            if ($request->hasFile('gambar')) {
+                $path = $request->file('gambar')->store('images', 'public');
+                $product->gambar = $path;
+            }
+
+            $product->save();
+
+            return redirect()->route('product')->with('success', 'Berhasil mengupdate barang');
+        } catch (\Throwable $th) {
+            dd($th);
+        }
+    }
+
+    <?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Products;
+use App\Models\Transactions;
+use App\Models\TransactionDetail;
+use Illuminate\Http\Request;
+
+class TransactionsController extends Controller
+{
+    /**
+     * Display a listing of the resource.
+     */
+    public function index()
+    {
+        $transactions = Transactions::with(['details.product', 'user'])->get();
+        return view('purchases.index', compact('transactions'));
+    }
+
+
+
+    /**
+     * Show the form for creating a new resource.
+     */
+    public function create()
+    {
+        $products = Products::all();
+        return view('purchases.create', compact('products'));
+    }
+
+    public function cart(Request $request)
+    {
+        $cart = session()->get('cart', []);
+
+        foreach ($request->input('jumlah') as $productId => $jumlah) {
+            if ($jumlah > 0) {
+                $cart[$productId] = [
+                    'id' => $productId, // <- tambahkan id produk di sini
+                    'nama_produk' => $request->input('nama_produk')[$productId],
+                    'jumlah' => $jumlah,
+                    'harga' => $request->input('harga')[$productId],
+                    'subtotal' => $jumlah * $request->input('harga')[$productId],
+                ];
+            } else {
+                unset($cart[$productId]);
+            }
+        }
+
+        session()->put('cart', $cart);
+
+        return redirect()->route('transactionCheckout');
+    }
+
+
+    public function checkout()
+    {
+        $cart = session('cart', []);
+        return view('purchases.checkout', compact('cart'));
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(Request $request)
+    {
+        // dd(session('cart'));
+        try {
+            if (!$request->member) {
+                $request->validate([
+                    'total_payment' => 'required|string',
+                ]);
+
+                $total_payment = (int) str_replace(['Rp', '.', ','], '', $request->total_payment);
+
+                $totalReturn = max(0, $total_payment - $request->total_price);
+                $transaction = Transactions::create([
+                    'user_id' => auth()->id(),
+                    'total_price' => $request->total_price,
+                    'total_payment' => $total_payment,
+                    'total_return' => $totalReturn,
+                    'point' => 0
+                ]);
+
+                $cart = session('cart'); // pastikan cart disimpan di session
+                foreach ($cart as $item) {
+                    TransactionDetail::create([
+                        'transaction_id' => $transaction->id,
+                        'product_id' => $item['id'], // pastikan 'id' produk ada di cart
+                        'quantity' => $item['jumlah'],
+                        'sub_total' => $item['subtotal']
+                    ]);
+
+                    // Kurangi stok produk
+                    $product = Products::find($item['id']);
+                    if ($product) {
+                        $product->stok -= $item['jumlah'];
+                        $product->save();
+                    }
+                }
+
+                session()->forget('cart');
+
+                return redirect()->route('invoice', ['id' => $transaction->id]);
+            } else {
+                dd('ooh');
+            }
+        } catch (\Throwable $th) {
+            dd($th);
+        }
+
+    }
+
+    public function invoice($id)
+    {
+        $transaction = Transactions::with('details.product')->findOrFail($id);
+
+        return view('purchases.invoice', compact('transaction'));
+    }
+
+    /**
+     * Display the specified resource.
+     */
+    public function show(Transactions $transactions)
+    {
+        //
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(Transactions $transactions)
+    {
+        //
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(Request $request, Transactions $transactions)
+    {
+        //
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(Transactions $transactions)
+    {
+        //
+    }
+}
+
+
+    // View 
+
+    Checkout 
+    <!-- <x-layout>
+
+        <x-card>
+            <form id="transactionForm" action="{{ route('storeTransaction') }}" method="post">
+                @csrf
+                <div class="w-full flex">
+                    <input type="hidden" id="payment_clean" name="total_payment_clean" />
+    
+    
+                    <div class="w-1/2">
+                        <h6 class="text-3xl">Produk yang dipilih</h6>
+                        <br>
+                        @foreach ($cart as $item)
+                            <input type="hidden" name="total_price" value="{{ collect($cart)->sum('subtotal') }}" />
+                            <div class="mb-4"> {{-- memberi margin bawah tiap item --}}
+                                <div>{{ $item['nama_produk'] }}</div>
+                                <div class="flex justify-between">
+                                    <div>Rp. {{ number_format($item['harga']) }} X {{ $item['jumlah'] }}</div>
+                                    <div>Rp. {{ number_format($item['subtotal']) }}</div>
+                                </div>
+                            </div>
+                        @endforeach
+                        <div class="flex justify-between">
+                            <h6 class="text-2xl">Total</h6>
+                            <h6 class="text-2xl">Rp. {{ number_format(collect($cart)->sum('subtotal')) }}</h6>
+                        </div>
+                    </div>
+    
+                    <div class=" w-1/2 p-10">
+                        <div>Member Status<span class="text-red-400"> Dapat juga membuat member</span></div>
+                        <select id="member" name="member"
+                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500">
+                            <option value="">Bukan Member</option>
+                            <option value="MEMBER">Member</option>
+                        </select>
+                        <br>
+                        <div id="hp" class="hidden">
+                            <div>No Telepon<span class="text-red-400"> (daftar/gunakan member)</span></div>
+                            <input type="number" id="no_hp"
+                                class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+                                name="no_hp" />
+                            <br>
+                        </div>
+                        <div>Total Bayar</div>
+                        <input type="text" id="payment"
+                            class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+                            oninput="formatRupiah(this); checkPayment();" name="total_payment"
+                            data-total="{{ collect($cart)->sum('subtotal') }}" />
+    
+                        <span class="text-red-300 hidden" id="bayar">Jumlah bayar kurang</span>
+                        <br>
+                        <div class="flex w-full justify-end">
+                            <button type="submit"
+                                class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-blue-600 dark:hover:bg-blue-700 focus:outline-none dark:focus:ring-blue-800">
+                                Tambah Pembelian
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </x-card>
+    
+    </x-layout>
+    
+    <script>
+        document.getElementById("member").addEventListener("change", function() {
+            let phoneInput = document.getElementById('hp')
+            if (this.value === 'MEMBER') {
+                phoneInput.classList.remove('hidden');
+            } else {
+                phoneInput.classList.add('hidden');
+            }
+        });
+    
+        const paymentField = document.getElementById('payment');
+        const paymentClean = document.getElementById('payment_clean');
+        const bayarSpan = document.getElementById('bayar');
+        const total = parseInt(paymentField.dataset.total);
+    
+        function formatRupiah(input) {
+            let angka = input.value.replace(/[^\d]/g, '');
+            if (!angka) {
+                input.value = '';
+                return;
+            }
+            let formatted = new Intl.NumberFormat('id-ID').format(angka);
+            input.value = `Rp ${formatted}`;
+        }
+    
+        function checkPayment() {
+            let bayar = paymentField.value.replace(/[^\d]/g, '');
+            bayar = parseInt(bayar) || 0;
+    
+            // Update hidden input
+            paymentClean.value = bayar;
+    
+            // Cek apakah cukup
+            if (bayar < total) {
+                bayarSpan.classList.remove('hidden');
+            } else {
+                bayarSpan.classList.add('hidden');
+            }
+        }
+    
+        document.getElementById('transactionForm').addEventListener('submit', function(e) {
+            const bayar = parseInt(paymentClean.value) || 0;
+    
+            if (bayar < total) {
+                e.preventDefault(); // Mencegah form submit
+    
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Pembayaran Kurang!',
+                    text: 'Jumlah bayar masih kurang dari total belanja.',
+                    confirmButtonText: 'Oke'
+                });
+    
+                return false;
+            }
+        });
+    
+        // Jalankan saat input berubah
+        paymentField.addEventListener('input', function() {
+            formatRupiah(this);
+            checkPayment();
+        });
+    
+        // Jalankan sekali di awal
+        checkPayment();
+    </script> -->
+    
     </div>
 </body>
 </html>
